@@ -56,9 +56,12 @@ void waitForMessageImpl(SubscribeOptions& ops,
 
     if (!timeout.isZero() && ros::Time::now() >= end)
     {
+      ops.callback_queue = NULL;
       return;
     }
   }
+
+  ops.callback_queue = NULL;
 }
 
 } // namespace topic

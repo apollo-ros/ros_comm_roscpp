@@ -37,6 +37,7 @@
 #include <cerrno>
 #include <cstring>
 #include <typeinfo>
+#include <cstdlib>
 
 #include "ros/common.h"
 #include "ros/io.h"
@@ -74,6 +75,9 @@ Subscription::Subscription(const std::string &name, const std::string& md5sum, c
 , dropped_(false)
 , shutting_down_(false)
 , transport_hints_(transport_hints)
+, default_transport_(true)
+, self_subscribed_(false)
+, last_read_index_(-1)
 {
 }
 
@@ -201,6 +205,16 @@ bool urisEqual(const std::string& uri1, const std::string& uri2)
   network::splitURI(uri1, host1, port1);
   network::splitURI(uri2, host2, port2);
   return port1 == port2 && host1 == host2;
+}
+
+bool Subscription::getSelfSubscribed()
+{
+  return self_subscribed_;
+}
+
+void Subscription::setSelfSubscribed(bool self_subscribed)
+{
+  self_subscribed_ = self_subscribed;
 }
 
 bool Subscription::pubUpdate(const V_string& new_pubs)
@@ -646,7 +660,7 @@ uint32_t Subscription::handleMessage(const SerializedMessage& m, bool ser, bool 
         nonconst_need_copy = true;
       }
 
-      info->subscription_queue_->push(info->helper_, deserializer, info->has_tracked_object_, info->tracked_object_, nonconst_need_copy, receipt_time, &was_full);
+      info->subscription_queue_->push(false, info->helper_, deserializer, info->has_tracked_object_, info->tracked_object_, nonconst_need_copy, receipt_time, &was_full);
 
       if (was_full)
       {
@@ -659,18 +673,41 @@ uint32_t Subscription::handleMessage(const SerializedMessage& m, bool ser, bool 
     }
   }
 
-  // measure statistics
-  statistics_.callback(connection_header, name_, link->getCallerID(), m, link->getStats().bytes_received_, receipt_time, drops > 0);
-
-  // If this link is latched, store off the message so we can immediately pass it to new subscribers later
-  if (link->isLatched())
+  if (name_ == "/rosout" || name_ == "/rosout_agg" || name_ == "/tf")
   {
-    LatchInfo li;
-    li.connection_header = connection_header;
-    li.link = link;
-    li.message = m;
-    li.receipt_time = receipt_time;
-    latched_messages_[link] = li;
+    if (link)
+    {
+      // measure statistics
+      statistics_.callback(connection_header, name_, link->getCallerID(),
+      m, link->getStats().bytes_received_, receipt_time, drops > 0);
+      // If this link is latched, store off the message so we can immediately
+      // pass it to new subscribers later
+      if (link->isLatched())
+      {
+      LatchInfo li;
+      li.connection_header = connection_header;
+      li.link = link;
+      li.message = m;
+      li.receipt_time = receipt_time;
+      latched_messages_[link] = li;
+      }
+    }
+  }
+  else
+  {
+    boost::mutex::scoped_lock lock(publisher_links_mutex_);
+    for (V_PublisherLink::iterator it = publisher_links_.begin(); it != publisher_links_.end(); ++it)
+    {
+      if ((*it)->isLatched())
+      {
+        LatchInfo li;
+        li.connection_header = connection_header;
+        li.link = (*it);
+        li.message = m;
+        li.receipt_time = receipt_time;
+        latched_messages_[(*it)] = li;
+      }
+    }
   }
 
   cached_deserializers_.clear();
@@ -685,6 +722,7 @@ bool Subscription::addCallback(const SubscriptionCallbackHelperPtr& helper, cons
 
   statistics_.init(helper);
 
+  helper_ = helper;
   // Decay to a real type as soon as we have a subscriber with a real type
   {
     boost::mutex::scoped_lock lock(md5sum_mutex_);
@@ -741,7 +779,7 @@ bool Subscription::addCallback(const SubscriptionCallbackHelperPtr& helper, cons
 
             MessageDeserializerPtr des(boost::make_shared<MessageDeserializer>(helper, latch_info.message, latch_info.connection_header));
             bool was_full = false;
-            info->subscription_queue_->push(info->helper_, des, info->has_tracked_object_, info->tracked_object_, true, latch_info.receipt_time, &was_full);
+            info->subscription_queue_->push(default_transport_, info->helper_, des, info->has_tracked_object_, info->tracked_object_, true, latch_info.receipt_time, &was_full);
             if (!was_full)
             {
               info->callback_queue_->addCallback(info->subscription_queue_, (uint64_t)info.get());
@@ -848,6 +886,16 @@ const std::string Subscription::md5sum()
 {
   boost::mutex::scoped_lock lock(md5sum_mutex_);
   return md5sum_;
+}
+
+void Subscription::setLastIndex(int last_read_index)
+{
+  last_read_index_ = last_read_index;
+}
+
+int Subscription::getLastIndex()
+{
+  return last_read_index_;
 }
 
 }

@@ -30,6 +30,13 @@
 #include "ros/message_deserializer.h"
 #include "ros/subscription_callback_helper.h"
 
+#include "roscpp/SharedMemoryHeader.h"
+#include "boost/bind.hpp"
+#include "ros/names.h"
+#include "ros/config_comm.h"
+
+#include <thread>
+
 namespace ros
 {
 
@@ -39,6 +46,9 @@ SubscriptionQueue::SubscriptionQueue(const std::string& topic, int32_t queue_siz
 , full_(false)
 , queue_size_(0)
 , allow_concurrent_callbacks_(allow_concurrent_callbacks)
+, first_run_(true)
+, internal_cb_runnning_(false)
+, last_read_index_(-1)
 {}
 
 SubscriptionQueue::~SubscriptionQueue()
@@ -46,7 +56,7 @@ SubscriptionQueue::~SubscriptionQueue()
 
 }
 
-void SubscriptionQueue::push(const SubscriptionCallbackHelperPtr& helper, const MessageDeserializerPtr& deserializer,
+void SubscriptionQueue::push(bool default_transport, const SubscriptionCallbackHelperPtr& helper, const MessageDeserializerPtr& deserializer,
                                  bool has_tracked_object, const VoidConstWPtr& tracked_object, bool nonconst_need_copy,
                                  ros::Time receipt_time, bool* was_full)
 {
@@ -80,6 +90,7 @@ void SubscriptionQueue::push(const SubscriptionCallbackHelperPtr& helper, const 
   }
 
   Item i;
+  i.default_transport = default_transport;
   i.helper = helper;
   i.deserializer = deserializer;
   i.has_tracked_object = has_tracked_object;

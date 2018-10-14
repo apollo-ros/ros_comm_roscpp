@@ -248,7 +248,7 @@ bool TransportUDP::createIncoming(int port, bool is_server)
 
   server_address_.sin_family = AF_INET;
   server_address_.sin_port = htons(port);
-  server_address_.sin_addr.s_addr = isOnlyLocalhostAllowed() ? 
+  server_address_.sin_addr.s_addr = isOnlyLocalhostAllowed() ?
                                     htonl(INADDR_LOOPBACK) :
                                     INADDR_ANY;
   if (bind(sock_, (sockaddr *)&server_address_, sizeof(server_address_)) < 0)
@@ -616,7 +616,7 @@ void TransportUDP::enableRead()
 {
   {
     boost::mutex::scoped_lock lock(close_mutex_);
-  
+
     if (closed_)
     {
       return;
@@ -689,7 +689,7 @@ void TransportUDP::disableWrite()
 TransportUDPPtr TransportUDP::createOutgoing(std::string host, int port, int connection_id, int max_datagram_size)
 {
   ROS_ASSERT(is_server_);
-  
+
   TransportUDPPtr transport(boost::make_shared<TransportUDP>(poll_set_, flags_, max_datagram_size));
   if (!transport->connect(host, port, connection_id))
   {
@@ -709,6 +709,24 @@ std::string TransportUDP::getClientURI()
   getpeername(sock_, (sockaddr *)&sas, &sas_len);
 
   sockaddr_in *sin = (sockaddr_in *)&sas;
+
+  char namebuf[128];
+  int port = ntohs(sin->sin_port);
+  strcpy(namebuf, inet_ntoa(sin->sin_addr));
+
+  std::string ip = namebuf;
+  std::stringstream uri;
+  uri << ip << ":" << port;
+
+  return uri.str();
+}
+
+std::string TransportUDP::getLocalIp()
+{
+  socklen_t local_address_len = sizeof(local_address_);
+  getsockname(sock_, (sockaddr *)&local_address_, &local_address_len);
+
+  sockaddr_in *sin = (sockaddr_in *)&local_address_;
 
   char namebuf[128];
   int port = ntohs(sin->sin_port);
